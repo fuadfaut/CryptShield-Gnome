@@ -2,9 +2,8 @@
 
 CryptShield GNOME Extension is a native GNOME Shell indicator for controlling and monitoring `dnscrypt-proxy` from the top bar. It is the lightweight GNOME extension version of CryptShield and is intended to live as a standalone project, separate from the previous Tauri desktop app.
 
-## Warning
-
-This is a vibe-coding project and should be treated as experimental system software. It edits DNS, NetworkManager profiles, `systemd-resolved` runtime DNS, `dnscrypt-proxy` configuration, and installs a privileged Polkit helper. Review the scripts before using it on a work machine, shared machine, or production system. The default helper install requires administrator authentication via Polkit; passwordless mode is not installed by default.
+ > ⚠️Warning
+This is a **vibe-coding project** and should be treated as experimental system software. It edits DNS, NetworkManager profiles, `systemd-resolved` runtime DNS, `dnscrypt-proxy` configuration, and installs a privileged Polkit helper. Review the scripts before using it on a work machine, shared machine, or production system. The default helper install requires administrator authentication via Polkit; passwordless mode is not installed by default.
 
 ## Features
 
@@ -39,7 +38,13 @@ sudo ./install-helper.sh
 
 The helper is installed as `/usr/local/libexec/cryptshield-helper`. The default Polkit rule uses `AUTH_ADMIN_KEEP`, so protected actions can ask for administrator authentication and may be cached by Polkit for a short time. The helper validates CryptShield actions and only manages `dnscrypt-proxy`, its config, and active NetworkManager DNS settings.
 
-A passwordless example is provided at `polkit/90-cryptshield-passwordless.rules.example` for personal single-user machines, but it must be reviewed and installed manually.
+For a personal single-user machine where you want the GNOME toggle to work after login without another password prompt, install the helper in passwordless mode:
+
+```bash
+sudo ./install-helper.sh --passwordless
+```
+
+Passwordless mode is still limited to the fixed CryptShield helper path, active local sessions, and users in the `wheel` group, but it should not be used on shared, work, or production machines.
 
 ## Install From Zip
 
@@ -67,7 +72,7 @@ Restart GNOME Shell or log out and back in after changing extension source files
 
 ```bash
 glib-compile-schemas schemas
-gnome-extensions pack . --force --extra-source=utils.js --extra-source=install-helper.sh --extra-source=helpers/cryptshield-helper --extra-source=polkit/90-cryptshield.rules --extra-source=public/logo-tray-on.svg --extra-source=public/logo-tray-off.svg
+gnome-extensions pack . --force --extra-source=utils.js --extra-source=install-helper.sh --extra-source=helpers/cryptshield-helper --extra-source=polkit/90-cryptshield.rules --extra-source=polkit/90-cryptshield-passwordless.rules.example --extra-source=public/logo-tray-on.svg --extra-source=public/logo-tray-off.svg
 ```
 
 The generated bundle is named:

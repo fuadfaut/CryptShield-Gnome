@@ -18,6 +18,7 @@
 - Hardened the default Polkit rule from passwordless access to `AUTH_ADMIN_KEEP`.
 - Moved passwordless helper access to an explicit example rule that is not installed by default.
 - Added `SECURITY.md` with helper scope, passwordless mode guidance, and reporting notes.
+- Added `sudo ./install-helper.sh --passwordless` as an explicit personal-machine install mode so the extension can toggle DNSCrypt after login without another Polkit prompt.
 - Changed status detection so the UI does not report full protection when the service is active but system DNS is not using DNSCrypt.
 
 ### Added
