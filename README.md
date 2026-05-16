@@ -13,7 +13,7 @@ CryptShield GNOME Extension is a native GNOME Shell indicator for controlling an
 
 ## Requirements
 
-- Fedora Linux with GNOME Shell 46 or newer.
+- Fedora Linux with GNOME Shell 46-50.
 - `dnscrypt-proxy`
 - `polkit`
 - `glib2`
