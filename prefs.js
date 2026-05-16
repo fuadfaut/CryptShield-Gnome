@@ -8,7 +8,7 @@ import {
     resolverIdAt,
     resolverIndex,
     RESOLVERS,
-    restartService,
+    restartProtection,
     setStartupEnabled
 } from './utils.js';
 
@@ -139,10 +139,10 @@ export default class CryptShieldPreferences extends ExtensionPreferences {
 
     async _applyDnscryptConfig(settings, window, restartAfterWrite) {
         try {
-            await configureDnscrypt(settings);
-
             if (restartAfterWrite)
-                await restartService();
+                await restartProtection(settings);
+            else
+                await configureDnscrypt(settings);
         } catch (error) {
             this._showError(window, error);
         }

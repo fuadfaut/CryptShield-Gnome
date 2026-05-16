@@ -4,12 +4,12 @@ CryptShield GNOME Extension is a native GNOME Shell indicator for controlling an
 
 ## Features
 
-- Top bar shield indicator that reflects `dnscrypt-proxy.service` status.
+- Top bar shield indicator that reflects both `dnscrypt-proxy.service` status and whether system DNS is routed through the local proxy.
 - Popup menu with one-click start/stop, resolver status, query counters, Preferences shortcut, and restart action.
 - Libadwaita Preferences window for resolver selection and advanced options.
 - GSettings-backed configuration for resolver, startup behavior, caching, DNSSEC, and Force TCP.
-- Polkit-backed system operations through `pkexec`.
-- Lightweight polling of `systemctl is-active dnscrypt-proxy.service`.
+- Polkit-backed system operations through `pkexec`, batched to avoid repeated password prompts for one action.
+- Lightweight polling of service state and local DNS routing.
 
 ## Requirements
 
@@ -24,6 +24,16 @@ Install runtime dependencies:
 ```bash
 sudo dnf install dnscrypt-proxy polkit glib2 gnome-shell
 ```
+
+## Install Privileged Helper
+
+Install this once to avoid repeated password prompts from the extension:
+
+```bash
+sudo ./install-helper.sh
+```
+
+The helper is installed as `/usr/local/libexec/cryptshield-helper`, and a Polkit rule allows active local `wheel` users to run only that helper without repeated authentication. The helper validates CryptShield actions and only manages `dnscrypt-proxy`, its config, and active NetworkManager DNS settings.
 
 ## Install From Zip
 
@@ -73,6 +83,8 @@ cryptshield@fuadfaut.my.id.shell-extension.zip
 
 ## Notes
 
-CryptShield writes `/etc/dnscrypt-proxy/dnscrypt-proxy.toml` with elevated `pkexec sed` calls and controls `dnscrypt-proxy.service` through `systemctl`. GNOME may show an administrator authentication prompt when applying changes.
+CryptShield writes `/etc/dnscrypt-proxy/dnscrypt-proxy.toml`, controls `dnscrypt-proxy.service`, and changes every active NetworkManager connection to use the local DNSCrypt listener at `127.0.0.1` and `::1` while protection is enabled. The selected resolver in Preferences is written as the upstream `dnscrypt-proxy` server. Without the privileged helper, GNOME may show an administrator authentication prompt when applying a protected action.
+
+If the service is active but system DNS is not routed through the local proxy, the indicator shows `DNSCrypt Not Routed` instead of reporting full protection.
 
 Query counters read `/var/log/dnscrypt-query.log` when available. If the query log is missing or not readable, the extension keeps the counters at zero instead of blocking the shell.

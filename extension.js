@@ -9,12 +9,11 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import {
-    configureDnscrypt,
-    getServiceStatus,
+    getProtectionStatus,
     readQueryStats,
     resolverLabel,
-    restartService,
-    setServiceActive
+    restartProtection,
+    setProtectionActive
 } from './utils.js';
 
 const PANEL_ICON_ACTIVE = 'security-high-symbolic';
@@ -29,6 +28,7 @@ class CryptShieldIndicator extends PanelMenu.Button {
         this._extension = extension;
         this._settings = settings;
         this._isActive = false;
+        this._isDnsRouted = false;
         this._busy = false;
         this._pollId = 0;
         this._settingsSignals = [];
@@ -73,7 +73,7 @@ class CryptShieldIndicator extends PanelMenu.Button {
 
     _buildMenu() {
         this._statusItem = new PopupMenu.PopupSwitchMenuItem(_('DNSCrypt Active'), false);
-        this._statusItem.connect('activate', () => this._toggleProtection());
+        this._statusItem.connect('toggled', (_item, state) => this._toggleProtection(state));
         this.menu.addMenuItem(this._statusItem);
 
         this._subtitleItem = new PopupMenu.PopupMenuItem('', {
@@ -107,7 +107,11 @@ class CryptShieldIndicator extends PanelMenu.Button {
             icon_name: 'emblem-system-symbolic',
             style_class: 'popup-menu-icon'
         }), 1);
-        settingsItem.connect('activate', () => this._extension.openPreferences());
+        settingsItem.connect('activate', () => {
+            this._extension.openPreferences().catch(error => {
+                Main.notifyError(_('CryptShield'), error.message);
+            });
+        });
         this.menu.addMenuItem(settingsItem);
 
         const restartItem = new PopupMenu.PopupMenuItem(_('Restart Service'));
@@ -155,7 +159,7 @@ class CryptShieldIndicator extends PanelMenu.Button {
         );
     }
 
-    async _toggleProtection() {
+    async _toggleProtection(targetState = null) {
         if (this._busy)
             return;
 
@@ -163,10 +167,8 @@ class CryptShieldIndicator extends PanelMenu.Button {
         this._setBusy(true);
 
         try {
-            if (!this._isActive)
-                await configureDnscrypt(this._settings);
-
-            await setServiceActive(!this._isActive);
+            const shouldEnable = targetState ?? !(this._isActive && this._isDnsRouted);
+            await setProtectionActive(this._settings, shouldEnable);
             await this._refreshStatus();
         } catch (error) {
             Main.notifyError(_('CryptShield'), error.message);
@@ -185,8 +187,7 @@ class CryptShieldIndicator extends PanelMenu.Button {
         this._setBusy(true, _('Restarting...'));
 
         try {
-            await configureDnscrypt(this._settings);
-            await restartService();
+            await restartProtection(this._settings);
             await this._refreshStatus();
         } catch (error) {
             Main.notifyError(_('CryptShield'), error.message);
@@ -199,8 +200,9 @@ class CryptShieldIndicator extends PanelMenu.Button {
 
     async _refreshStatus() {
         try {
-            const status = await getServiceStatus();
-            this._isActive = status === 'active';
+            const status = await getProtectionStatus();
+            this._isActive = status.isServiceActive;
+            this._isDnsRouted = status.isDnsRouted;
             this._updateUi();
         } catch (error) {
             logError(error, 'CryptShield status refresh failed');
@@ -233,15 +235,23 @@ class CryptShieldIndicator extends PanelMenu.Button {
 
         this._panelLabel.text = resolver;
         this._panelLabel.visible = this._isActive;
-        this._panelIcon.icon_name = this._isActive ? PANEL_ICON_ACTIVE : PANEL_ICON_INACTIVE;
+        this._panelIcon.icon_name = this._isActive && this._isDnsRouted ? PANEL_ICON_ACTIVE : PANEL_ICON_INACTIVE;
         this._panelIcon.remove_style_class_name('cryptshield-panel-icon-active');
         this._panelIcon.remove_style_class_name('cryptshield-panel-icon-inactive');
-        this._panelIcon.add_style_class_name(this._isActive
+        this._panelIcon.add_style_class_name(this._isActive && this._isDnsRouted
             ? 'cryptshield-panel-icon-active'
             : 'cryptshield-panel-icon-inactive');
 
-        this._statusItem.setToggleState(this._isActive);
-        this._statusItem.label.text = this._isActive ? _('DNSCrypt Active') : _('Service Stopped');
+        this._statusItem.setToggleState(this._isActive && this._isDnsRouted);
+        this._statusItem.label.text = this._isActive && !this._isDnsRouted
+            ? _('DNSCrypt Not Routed')
+            : this._isActive ? _('DNSCrypt Active') : _('Service Stopped');
+
+        if (this._isActive && !this._isDnsRouted) {
+            this._subtitleItem.label.text = _('Service active, but system DNS is not routed through DNSCrypt');
+            return;
+        }
+
         this._subtitleItem.label.text = this._isActive
             ? `Protected via ${resolver}`
             : _('System using default DNS');

@@ -2,6 +2,17 @@
 
 ## 1.0.0 - 2026-05-16
 
+### Fixed
+
+- Batched config, service, and DNS routing changes into one Polkit action to reduce repeated password prompts.
+- Added an installable root-owned helper and focused Polkit rule so CryptShield actions can run without repeated password prompts after one setup step.
+- Routed active NetworkManager connection profiles and systemd-resolved links through the local DNSCrypt listener when protection starts.
+- Limited config rewrites to the first global dnscrypt-proxy setting so Local DoH listen settings are not accidentally enabled on port 53.
+- Switched the panel switch handler to the GNOME Shell `toggled` signal.
+- Fixed routed detection for NetworkManager's escaped IPv6 DNS output.
+- Enabled dnscrypt-proxy blocked name/IP lists and dedicated blocked-query logs, then read those logs for the blocked counter.
+- Changed status detection so the UI does not report full protection when the service is active but system DNS is not using DNSCrypt.
+
 ### Added
 
 - Initial standalone GNOME Shell extension version of CryptShield.

@@ -3,6 +3,12 @@ import Gio from 'gi://Gio';
 export const SERVICE_NAME = 'dnscrypt-proxy.service';
 export const CONFIG_PATH = '/etc/dnscrypt-proxy/dnscrypt-proxy.toml';
 export const QUERY_LOG_PATH = '/var/log/dnscrypt-query.log';
+const BLOCKED_NAMES_LOG_PATH = '/var/log/dnscrypt-blocked-names.log';
+const BLOCKED_IPS_LOG_PATH = '/var/log/dnscrypt-blocked-ips.log';
+const LOCAL_DNS_IPV4 = '127.0.0.1';
+const LOCAL_DNS_IPV6 = '::1';
+const LOCAL_DNS_PRIORITY = '-50';
+const HELPER_PATH = '/usr/local/libexec/cryptshield-helper';
 
 export const RESOLVERS = [
     {id: '', label: 'All Servers'},
@@ -46,6 +52,16 @@ export function runCommand(argv, options = {}) {
                 Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
             );
         } catch (error) {
+            if (allowFailure) {
+                resolve({
+                    stdout: '',
+                    stderr: error.message,
+                    status: -1,
+                    ok: false
+                });
+                return;
+            }
+
             reject(error);
             return;
         }
@@ -78,30 +94,105 @@ export async function getServiceStatus() {
     return result.stdout.trim();
 }
 
-export async function setServiceActive(active) {
-    await runCommand(['pkexec', 'systemctl', active ? 'start' : 'stop', SERVICE_NAME]);
+export async function getProtectionStatus() {
+    const [serviceStatus, dnsRouteStatus] = await Promise.all([
+        getServiceStatus(),
+        getDnsRouteStatus()
+    ]);
+
+    return {
+        serviceStatus,
+        isServiceActive: serviceStatus === 'active',
+        isDnsRouted: dnsRouteStatus.routed,
+        routeSource: dnsRouteStatus.source
+    };
 }
 
-export async function restartService() {
-    await runCommand(['pkexec', 'systemctl', 'restart', SERVICE_NAME]);
+export async function setProtectionActive(settings, active) {
+    if (await runInstalledHelper(active ? 'activate' : 'deactivate', settings))
+        return;
+
+    const steps = active
+        ? [
+            prepareRuntimeScript(),
+            configScript(settings),
+            `systemctl start ${shellQuote(SERVICE_NAME)}`,
+            routeSystemDnsScript()
+        ]
+        : [
+            `systemctl stop ${shellQuote(SERVICE_NAME)}`,
+            revertSystemDnsScript()
+        ];
+
+    await runPrivilegedScript(steps.join('\n'));
+}
+
+export async function restartProtection(settings) {
+    if (await runInstalledHelper('restart', settings))
+        return;
+
+    await runPrivilegedScript([
+        prepareRuntimeScript(),
+        configScript(settings),
+        `systemctl restart ${shellQuote(SERVICE_NAME)}`,
+        routeSystemDnsScript()
+    ].join('\n'));
 }
 
 export async function setStartupEnabled(enabled) {
+    if (await runInstalledHelper('startup', null, enabled))
+        return;
+
     await runCommand(['pkexec', 'systemctl', enabled ? 'enable' : 'disable', SERVICE_NAME]);
 }
 
 function boolExpression(key, value) {
-    return `s/^[# ]*${key}[ ]*=.*/${key} = ${value ? 'true' : 'false'}/g`;
+    return `0,/^[ ]*#?[ ]*${key}[ ]*=.*/s//${key} = ${value ? 'true' : 'false'}/`;
 }
 
 function resolverExpression(resolver) {
     if (!resolver)
-        return "s/^[# ]*server_names[ ]*=.*/# server_names = ['cloudflare']/g";
+        return "0,/^[ ]*#?[ ]*server_names[ ]*=.*/s//# server_names = ['cloudflare']/";
 
-    return `s/^[# ]*server_names[ ]*=.*/server_names = ['${resolver}']/g`;
+    return `0,/^[ ]*#?[ ]*server_names[ ]*=.*/s//server_names = ['${resolver}']/`;
 }
 
 export async function configureDnscrypt(settings) {
+    if (await runInstalledHelper('configure', settings))
+        return;
+
+    await runPrivilegedScript([
+        prepareRuntimeScript(),
+        configScript(settings)
+    ].join('\n'));
+}
+
+async function runInstalledHelper(action, settings, value = null) {
+    if (!Gio.File.new_for_path(HELPER_PATH).query_exists(null))
+        return false;
+
+    const argv = ['pkexec', HELPER_PATH, action];
+
+    if (settings) {
+        argv.push(
+            normalizeResolver(settings.get_string('resolver')),
+            boolArg(settings.get_boolean('local-caching')),
+            boolArg(settings.get_boolean('require-dnssec')),
+            boolArg(settings.get_boolean('force-tcp'))
+        );
+    } else if (value !== null) {
+        argv.push(boolArg(value));
+    }
+
+    await runCommand(argv);
+    return true;
+}
+
+function boolArg(value) {
+    return value ? 'true' : 'false';
+}
+
+function configScript(settings) {
     const resolver = normalizeResolver(settings.get_string('resolver'));
     const caching = settings.get_boolean('local-caching');
     const dnssec = settings.get_boolean('require-dnssec');
@@ -109,26 +200,215 @@ export async function configureDnscrypt(settings) {
 
     const expressions = [
         resolverExpression(resolver),
+        `0,/^[ ]*#?[ ]*listen_addresses[ ]*=.*/s//listen_addresses = ['${LOCAL_DNS_IPV4}:53', '[${LOCAL_DNS_IPV6}]:53']/`,
         boolExpression('cache', caching),
         boolExpression('require_dnssec', dnssec),
         boolExpression('force_tcp', forceTcp),
-        "s/^[# ]*file[ ]*=[ ]*'query.log'/file = '\\/var\\/log\\/dnscrypt-query.log'/g"
+        "0,/^[ ]*#?[ ]*file[ ]*=[ ]*'query.log'/s//file = '\\/var\\/log\\/dnscrypt-query.log'/",
+        "/^\\[blocked_names\\]/,/^\\[blocked_ips\\]/s|^[ ]*#?[ ]*blocked_names_file[ ]*=.*|blocked_names_file = '/etc/dnscrypt-proxy/blocked-names.txt'|",
+        "/^\\[blocked_names\\]/,/^\\[blocked_ips\\]/s|^[ ]*#?[ ]*log_file[ ]*=.*|log_file = '/var/log/dnscrypt-blocked-names.log'|",
+        "/^\\[blocked_ips\\]/,/^\\[allowed_names\\]/s|^[ ]*#?[ ]*blocked_ips_file[ ]*=.*|blocked_ips_file = '/etc/dnscrypt-proxy/blocked-ips.txt'|",
+        "/^\\[blocked_ips\\]/,/^\\[allowed_names\\]/s|^[ ]*#?[ ]*log_file[ ]*=.*|log_file = '/var/log/dnscrypt-blocked-ips.log'|"
     ];
 
+    const sedArgs = ['sed', '-i', '-E'];
     for (const expression of expressions)
-        await runCommand(['pkexec', 'sed', '-i', '-E', expression, CONFIG_PATH]);
+        sedArgs.push('-e', expression);
+
+    sedArgs.push(CONFIG_PATH);
+    return shellCommand(sedArgs);
+}
+
+function prepareRuntimeScript() {
+    return 'mkdir -p /var/cache/dnscrypt-proxy';
+}
+
+function routeSystemDnsScript() {
+    return `
+if command -v nmcli >/dev/null 2>&1; then
+    nmcli -t -f UUID,TYPE,DEVICE connection show --active | while IFS=: read -r uuid type device; do
+        [ -n "$uuid" ] || continue
+        is_managed_dns_connection "$type" || continue
+        nmcli connection modify "$uuid" \\
+            ipv4.dns "${LOCAL_DNS_IPV4}" \\
+            ipv4.ignore-auto-dns yes \\
+            ipv4.dns-priority ${LOCAL_DNS_PRIORITY} \\
+            ipv6.dns "${LOCAL_DNS_IPV6}" \\
+            ipv6.ignore-auto-dns yes \\
+            ipv6.dns-priority ${LOCAL_DNS_PRIORITY} || continue
+        if [ -n "$device" ]; then
+            nmcli device reapply "$device" >/dev/null 2>&1 || nmcli connection up "$uuid" >/dev/null 2>&1 || true
+        fi
+    done
+fi
+
+if command -v resolvectl >/dev/null 2>&1 && command -v nmcli >/dev/null 2>&1; then
+    nmcli -t -f DEVICE,STATE device status | while IFS=: read -r device state; do
+        [ -n "$device" ] || continue
+        [ "$device" != "lo" ] || continue
+        [ "$state" = "connected" ] || continue
+        resolvectl dns "$device" ${LOCAL_DNS_IPV4} ${LOCAL_DNS_IPV6} || true
+        resolvectl domain "$device" '~.' || true
+        resolvectl default-route "$device" yes || true
+    done
+fi`.trim();
+}
+
+function revertSystemDnsScript() {
+    return `
+if command -v nmcli >/dev/null 2>&1; then
+    nmcli -t -f UUID,TYPE,DEVICE connection show --active | while IFS=: read -r uuid type device; do
+        [ -n "$uuid" ] || continue
+        is_managed_dns_connection "$type" || continue
+        nmcli connection modify "$uuid" \\
+            ipv4.dns "" \\
+            ipv4.ignore-auto-dns no \\
+            ipv4.dns-priority 0 \\
+            ipv6.dns "" \\
+            ipv6.ignore-auto-dns no \\
+            ipv6.dns-priority 0 || continue
+        if [ -n "$device" ]; then
+            nmcli device reapply "$device" >/dev/null 2>&1 || nmcli connection up "$uuid" >/dev/null 2>&1 || true
+        fi
+    done
+fi
+
+if command -v resolvectl >/dev/null 2>&1 && command -v nmcli >/dev/null 2>&1; then
+    nmcli -t -f DEVICE,STATE device status | while IFS=: read -r device state; do
+        [ -n "$device" ] || continue
+        [ "$device" != "lo" ] || continue
+        [ "$state" = "connected" ] || continue
+        resolvectl revert "$device" || true
+    done
+fi`.trim();
+}
+
+async function getDnsRouteStatus() {
+    const networkManagerStatus = await getNetworkManagerRouteStatus();
+
+    if (networkManagerStatus)
+        return networkManagerStatus;
+
+    const resolvedResult = await runCommand(['resolvectl', 'dns'], {allowFailure: true});
+
+    if (resolvedResult.ok && hasLocalDns(resolvedResult.stdout))
+        return {routed: true, source: 'systemd-resolved'};
+
+    const resolvConfResult = await runCommand(['cat', '/etc/resolv.conf'], {allowFailure: true});
+
+    return {
+        routed: resolvConfResult.ok && hasLocalDns(resolvConfResult.stdout),
+        source: resolvConfResult.ok ? 'resolv.conf' : 'unknown'
+    };
+}
+
+async function getNetworkManagerRouteStatus() {
+    const activeResult = await runCommand(
+        ['nmcli', '-t', '-f', 'UUID,TYPE', 'connection', 'show', '--active'],
+        {allowFailure: true}
+    );
+
+    if (!activeResult.ok)
+        return null;
+
+    const connections = activeResult.stdout
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+        .map(line => {
+            const [uuid, type] = line.split(':');
+            return {uuid, type};
+        })
+        .filter(connection => connection.uuid && isManagedDnsConnection(connection.type));
+
+    if (connections.length === 0)
+        return {routed: false, source: 'NetworkManager'};
+
+    for (const connection of connections) {
+        const profileResult = await runCommand(
+            ['nmcli', '-g', 'ipv4.dns,ipv4.ignore-auto-dns,ipv6.dns,ipv6.ignore-auto-dns', 'connection', 'show', connection.uuid],
+            {allowFailure: true}
+        );
+
+        if (!profileResult.ok || !profileUsesLocalDns(profileResult.stdout))
+            return {routed: false, source: 'NetworkManager'};
+    }
+
+    return {routed: true, source: 'NetworkManager'};
+}
+
+function isManagedDnsConnection(type) {
+    return !['loopback', 'dummy'].includes(type);
+}
+
+function profileUsesLocalDns(output) {
+    const [ipv4Dns = '', ipv4Ignore = '', ipv6Dns = '', ipv6Ignore = ''] = output
+        .replaceAll('\\:', ':')
+        .trimEnd()
+        .split('\n');
+
+    return hasLocalIpv4(ipv4Dns) &&
+        ipv4Ignore.trim() === 'yes' &&
+        (!ipv6Dns.trim() || hasLocalIpv6(ipv6Dns)) &&
+        (!ipv6Dns.trim() || ipv6Ignore.trim() === 'yes');
+}
+
+function hasLocalDns(output) {
+    return hasLocalIpv4(output) || hasLocalIpv6(output);
+}
+
+function hasLocalIpv4(output) {
+    return new RegExp(`(^|\\s|,)${LOCAL_DNS_IPV4.replaceAll('.', '\\.')}($|\\s|,)`).test(output);
+}
+
+function hasLocalIpv6(output) {
+    return /(^|\s|,)(::1|\[::1\])($|\s|,)/.test(output);
+}
+
+function runPrivilegedScript(script) {
+    return runCommand(['pkexec', 'sh', '-c', `set -eu
+is_managed_dns_connection() {
+    case "$1" in
+        loopback|dummy) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+${script}`]);
+}
+
+function shellCommand(argv) {
+    return argv.map(shellQuote).join(' ');
+}
+
+function shellQuote(value) {
+    return `'${String(value).replace(/'/g, "'\\''")}'`;
 }
 
 export async function readQueryStats() {
     const totalResult = await runCommand(['wc', '-l', QUERY_LOG_PATH], {allowFailure: true});
     const total = totalResult.ok ? Number.parseInt(totalResult.stdout.trim().split(/\s+/)[0], 10) || 0 : 0;
 
-    const tailResult = await runCommand(['tail', '-n', '2000', QUERY_LOG_PATH], {allowFailure: true});
+    const tailResult = await runCommand(['tail', '-n', '5000', QUERY_LOG_PATH], {allowFailure: true});
     const sample = tailResult.ok ? tailResult.stdout : '';
-    const blocked = sample
+    const recentlyBlocked = sample
         .split('\n')
         .filter(line => /\b(DROP|REJECT|SYNTH|BLOCK|BLOCKED)\b/i.test(line))
         .length;
+    const blocked = Math.max(recentlyBlocked, await countBlockedLogs());
 
     return {total, blocked};
+}
+
+async function countBlockedLogs() {
+    const results = await Promise.all([
+        runCommand(['wc', '-l', BLOCKED_NAMES_LOG_PATH], {allowFailure: true}),
+        runCommand(['wc', '-l', BLOCKED_IPS_LOG_PATH], {allowFailure: true})
+    ]);
+
+    return results.reduce((count, result) => {
+        if (!result.ok)
+            return count;
+
+        return count + (Number.parseInt(result.stdout.trim().split(/\s+/)[0], 10) || 0);
+    }, 0);
 }
