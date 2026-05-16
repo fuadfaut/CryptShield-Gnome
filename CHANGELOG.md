@@ -11,6 +11,10 @@
 - Switched the panel switch handler to the GNOME Shell `toggled` signal.
 - Fixed routed detection for NetworkManager's escaped IPv6 DNS output.
 - Enabled dnscrypt-proxy blocked name/IP lists and dedicated blocked-query logs, then read those logs for the blocked counter.
+- Fixed deactivation so the helper is called without resolver arguments.
+- Restored DNS safely on deactivation by backing up NetworkManager DNS profile settings and rebuilding runtime systemd-resolved DNS from NetworkManager.
+- Removed the resolver label from the top bar indicator and switched the panel icon to the tray logo assets.
+- Added README warning that this is an experimental vibe-coding project that changes system DNS and installs a privileged helper.
 - Changed status detection so the UI does not report full protection when the service is active but system DNS is not using DNSCrypt.
 
 ### Added

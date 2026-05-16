@@ -2,9 +2,13 @@
 
 CryptShield GNOME Extension is a native GNOME Shell indicator for controlling and monitoring `dnscrypt-proxy` from the top bar. It is the lightweight GNOME extension version of CryptShield and is intended to live as a standalone project, separate from the previous Tauri desktop app.
 
+## Warning
+
+This is a vibe-coding project and should be treated as experimental system software. It edits DNS, NetworkManager profiles, `systemd-resolved` runtime DNS, `dnscrypt-proxy` configuration, and installs a privileged Polkit helper. Review the scripts before using it on a work machine, shared machine, or production system.
+
 ## Features
 
-- Top bar shield indicator that reflects both `dnscrypt-proxy.service` status and whether system DNS is routed through the local proxy.
+- Top bar logo indicator that reflects both `dnscrypt-proxy.service` status and whether system DNS is routed through the local proxy.
 - Popup menu with one-click start/stop, resolver status, query counters, Preferences shortcut, and restart action.
 - Libadwaita Preferences window for resolver selection and advanced options.
 - GSettings-backed configuration for resolver, startup behavior, caching, DNSSEC, and Force TCP.
@@ -51,7 +55,7 @@ From this repository:
 ```bash
 glib-compile-schemas schemas
 mkdir -p ~/.local/share/gnome-shell/extensions/cryptshield@fuadfaut.my.id
-cp -r extension.js prefs.js utils.js metadata.json stylesheet.css schemas ~/.local/share/gnome-shell/extensions/cryptshield@fuadfaut.my.id/
+cp -r extension.js prefs.js utils.js metadata.json stylesheet.css schemas public ~/.local/share/gnome-shell/extensions/cryptshield@fuadfaut.my.id/
 gnome-extensions enable cryptshield@fuadfaut.my.id
 ```
 
@@ -61,7 +65,7 @@ Restart GNOME Shell or log out and back in after changing extension source files
 
 ```bash
 glib-compile-schemas schemas
-gnome-extensions pack . --force --extra-source=utils.js
+gnome-extensions pack . --force --extra-source=utils.js --extra-source=install-helper.sh --extra-source=helpers/cryptshield-helper --extra-source=polkit/90-cryptshield.rules --extra-source=public/logo-tray-on.svg --extra-source=public/logo-tray-off.svg
 ```
 
 The generated bundle is named:
@@ -76,6 +80,7 @@ cryptshield@fuadfaut.my.id.shell-extension.zip
 - `prefs.js` - Libadwaita Preferences UI.
 - `utils.js` - async GJS helpers for `systemctl`, `pkexec`, config writes, and query stats.
 - `stylesheet.css` - GNOME Shell menu and panel styling.
+- `public/` - tray logo assets used by the panel indicator.
 - `schemas/` - GSettings schema and compiled schema cache.
 - `metadata.json` - GNOME extension metadata.
 - `ui.html` - original UI mockup reference.

@@ -109,7 +109,7 @@ export async function getProtectionStatus() {
 }
 
 export async function setProtectionActive(settings, active) {
-    if (await runInstalledHelper(active ? 'activate' : 'deactivate', settings))
+    if (await runInstalledHelper(active ? 'activate' : 'deactivate', active ? settings : null))
         return;
 
     const steps = active
@@ -278,7 +278,10 @@ if command -v resolvectl >/dev/null 2>&1 && command -v nmcli >/dev/null 2>&1; th
         [ -n "$device" ] || continue
         [ "$device" != "lo" ] || continue
         [ "$state" = "connected" ] || continue
-        resolvectl revert "$device" || true
+        dns_servers="$(nmcli -g IP4.DNS,IP6.DNS device show "$device" | tr '\\n' ' ' | sed 's/[[:space:]]*$//')"
+        [ -n "$dns_servers" ] || continue
+        resolvectl dns "$device" $dns_servers || true
+        resolvectl default-route "$device" yes || true
     done
 fi`.trim();
 }

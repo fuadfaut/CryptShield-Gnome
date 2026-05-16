@@ -6,6 +6,7 @@ CONFIG_PATH='/etc/dnscrypt-proxy/dnscrypt-proxy.toml'
 LOCAL_DNS_IPV4='127.0.0.1'
 LOCAL_DNS_IPV6='::1'
 LOCAL_DNS_PRIORITY='-50'
+STATE_DIR='/var/lib/cryptshield'
 
 usage() {
     echo "Usage: cryptshield-helper activate|restart|configure RESOLVER CACHE DNSSEC FORCE_TCP" >&2
@@ -37,6 +38,89 @@ validate_resolver() {
 
 prepare_runtime_dirs() {
     mkdir -p /var/cache/dnscrypt-proxy
+    mkdir -p "$STATE_DIR"
+}
+
+backup_nm_dns_profiles() {
+    command -v nmcli >/dev/null 2>&1 || return 0
+    mkdir -p "$STATE_DIR"
+
+    nmcli -t -f UUID,TYPE connection show --active | while IFS=: read -r uuid type; do
+        [ -n "$uuid" ] || continue
+        is_managed_dns_connection "$type" || continue
+
+        backup_file="$STATE_DIR/nm-$uuid"
+        [ -f "$backup_file" ] && continue
+
+        nmcli -g ipv4.dns,ipv4.ignore-auto-dns,ipv4.dns-priority,ipv6.dns,ipv6.ignore-auto-dns,ipv6.dns-priority connection show "$uuid" > "$backup_file"
+    done
+}
+
+restore_nm_dns_profiles() {
+    command -v nmcli >/dev/null 2>&1 || return 0
+
+    restored=false
+    for backup_file in "$STATE_DIR"/nm-*; do
+        [ -f "$backup_file" ] || continue
+        restored=true
+        uuid="${backup_file##*/nm-}"
+        ipv4_dns="$(sed -n '1p' "$backup_file")"
+        ipv4_ignore="$(sed -n '2p' "$backup_file")"
+        ipv4_priority="$(sed -n '3p' "$backup_file")"
+        ipv6_dns="$(sed -n '4p' "$backup_file")"
+        ipv6_ignore="$(sed -n '5p' "$backup_file")"
+        ipv6_priority="$(sed -n '6p' "$backup_file")"
+
+        nmcli connection modify "$uuid" \
+            ipv4.dns "$ipv4_dns" \
+            ipv4.ignore-auto-dns "${ipv4_ignore:-no}" \
+            ipv4.dns-priority "${ipv4_priority:-0}" \
+            ipv6.dns "$ipv6_dns" \
+            ipv6.ignore-auto-dns "${ipv6_ignore:-no}" \
+            ipv6.dns-priority "${ipv6_priority:-0}" || continue
+    done
+
+    if [ "$restored" = false ]; then
+        nmcli -t -f UUID,TYPE connection show --active | while IFS=: read -r uuid type; do
+            [ -n "$uuid" ] || continue
+            is_managed_dns_connection "$type" || continue
+            nmcli connection modify "$uuid" \
+                ipv4.dns "" \
+                ipv4.ignore-auto-dns no \
+                ipv4.dns-priority 0 \
+                ipv6.dns "" \
+                ipv6.ignore-auto-dns no \
+                ipv6.dns-priority 0 || true
+        done
+    fi
+
+    nmcli -t -f UUID,DEVICE connection show --active | while IFS=: read -r uuid device; do
+        [ -n "$uuid" ] || continue
+        [ -n "$device" ] || continue
+        nmcli device reapply "$device" >/dev/null 2>&1 || nmcli connection up "$uuid" >/dev/null 2>&1 || true
+    done
+}
+
+restore_runtime_dns_from_nm() {
+    command -v nmcli >/dev/null 2>&1 || return 0
+    command -v resolvectl >/dev/null 2>&1 || return 0
+
+    nmcli -t -f DEVICE,STATE device status | while IFS=: read -r device state; do
+        [ -n "$device" ] || continue
+        [ "$device" != "lo" ] || continue
+        [ "$state" = "connected" ] || continue
+
+        dns_servers="$(nmcli -g IP4.DNS,IP6.DNS device show "$device" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+        [ -n "$dns_servers" ] || continue
+
+        # shellcheck disable=SC2086
+        resolvectl dns "$device" $dns_servers || true
+        resolvectl default-route "$device" yes || true
+    done
+}
+
+clear_saved_state() {
+    rm -f "$STATE_DIR"/nm-* 2>/dev/null || true
 }
 
 bool_expression() {
@@ -82,6 +166,8 @@ configure_dnscrypt() {
 
 route_system_dns() {
     if command -v nmcli >/dev/null 2>&1; then
+        backup_nm_dns_profiles
+
         nmcli -t -f UUID,TYPE,DEVICE connection show --active | while IFS=: read -r uuid type device; do
             [ -n "$uuid" ] || continue
             is_managed_dns_connection "$type" || continue
@@ -112,32 +198,9 @@ route_system_dns() {
 }
 
 revert_system_dns() {
-    if command -v nmcli >/dev/null 2>&1; then
-        nmcli -t -f UUID,TYPE,DEVICE connection show --active | while IFS=: read -r uuid type device; do
-            [ -n "$uuid" ] || continue
-            is_managed_dns_connection "$type" || continue
-            nmcli connection modify "$uuid" \
-                ipv4.dns "" \
-                ipv4.ignore-auto-dns no \
-                ipv4.dns-priority 0 \
-                ipv6.dns "" \
-                ipv6.ignore-auto-dns no \
-                ipv6.dns-priority 0 || continue
-
-            if [ -n "$device" ]; then
-                nmcli device reapply "$device" >/dev/null 2>&1 || nmcli connection up "$uuid" >/dev/null 2>&1 || true
-            fi
-        done
-    fi
-
-    if command -v resolvectl >/dev/null 2>&1 && command -v nmcli >/dev/null 2>&1; then
-        nmcli -t -f DEVICE,STATE device status | while IFS=: read -r device state; do
-            [ -n "$device" ] || continue
-            [ "$device" != "lo" ] || continue
-            [ "$state" = "connected" ] || continue
-            resolvectl revert "$device" || true
-        done
-    fi
+    restore_nm_dns_profiles
+    restore_runtime_dns_from_nm
+    clear_saved_state
 }
 
 action="${1:-}"

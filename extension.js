@@ -1,4 +1,5 @@
 import Clutter from 'gi://Clutter';
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import St from 'gi://St';
@@ -55,20 +56,31 @@ class CryptShieldIndicator extends PanelMenu.Button {
             y_align: Clutter.ActorAlign.CENTER
         });
 
+        this._panelIcons = {
+            active: this._iconFromAsset('logo-tray-on.svg', PANEL_ICON_ACTIVE),
+            inactive: this._iconFromAsset('logo-tray-off.svg', PANEL_ICON_INACTIVE)
+        };
         this._panelIcon = new St.Icon({
-            icon_name: PANEL_ICON_INACTIVE,
+            gicon: this._panelIcons.inactive,
             style_class: 'system-status-icon cryptshield-panel-icon'
         });
 
-        this._panelLabel = new St.Label({
-            text: resolverLabel(this._settings.get_string('resolver')),
-            y_align: Clutter.ActorAlign.CENTER,
-            style_class: 'cryptshield-panel-label'
-        });
-
         panelBox.add_child(this._panelIcon);
-        panelBox.add_child(this._panelLabel);
         this.add_child(panelBox);
+    }
+
+    _iconFromAsset(filename, fallbackIconName) {
+        const candidates = [
+            GLib.build_filenamev([this._extension.path, 'public', filename]),
+            GLib.build_filenamev([this._extension.path, filename])
+        ];
+
+        for (const path of candidates) {
+            if (GLib.file_test(path, GLib.FileTest.EXISTS))
+                return Gio.icon_new_for_string(path);
+        }
+
+        return Gio.ThemedIcon.new(fallbackIconName);
     }
 
     _buildMenu() {
@@ -233,9 +245,9 @@ class CryptShieldIndicator extends PanelMenu.Button {
     _updateUi() {
         const resolver = resolverLabel(this._settings.get_string('resolver'));
 
-        this._panelLabel.text = resolver;
-        this._panelLabel.visible = this._isActive;
-        this._panelIcon.icon_name = this._isActive && this._isDnsRouted ? PANEL_ICON_ACTIVE : PANEL_ICON_INACTIVE;
+        this._panelIcon.gicon = this._isActive && this._isDnsRouted
+            ? this._panelIcons.active
+            : this._panelIcons.inactive;
         this._panelIcon.remove_style_class_name('cryptshield-panel-icon-active');
         this._panelIcon.remove_style_class_name('cryptshield-panel-icon-inactive');
         this._panelIcon.add_style_class_name(this._isActive && this._isDnsRouted
