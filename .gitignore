@@ -1,0 +1,14 @@
+# Build artifacts
+*.shell-extension.zip
+schemas/gschemas.compiled
+
+# Local planning/mockup files
+prd.md
+ui.html
+
+# Local editor and OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp

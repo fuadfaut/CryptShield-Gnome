@@ -1,0 +1,40 @@
+.cryptshield-panel {
+  spacing: 5px;
+  padding: 0 6px;
+}
+
+.cryptshield-panel-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cryptshield-panel-icon-active {
+  color: #57e389;
+}
+
+.cryptshield-panel-icon-inactive {
+  color: #c0bfbc;
+}
+
+.cryptshield-subtitle {
+  color: #9a9996;
+  font-size: 12px;
+}
+
+.cryptshield-stats {
+  spacing: 6px;
+}
+
+.cryptshield-stat-row {
+  spacing: 24px;
+}
+
+.cryptshield-stat-value {
+  color: #c0bfbc;
+  font-family: monospace;
+  text-align: right;
+}
+
+.cryptshield-stat-blocked {
+  color: #ff7b72;
+}

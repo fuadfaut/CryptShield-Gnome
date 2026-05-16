@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.cryptshield" path="/org/gnome/shell/extensions/cryptshield/">
+    <key name="resolver" type="s">
+      <default>'cloudflare'</default>
+      <summary>Primary DNS resolver</summary>
+      <description>dnscrypt-proxy server name used by CryptShield.</description>
+    </key>
+    <key name="run-on-startup" type="b">
+      <default>true</default>
+      <summary>Run on startup</summary>
+      <description>Enable dnscrypt-proxy when the system boots.</description>
+    </key>
+    <key name="local-caching" type="b">
+      <default>true</default>
+      <summary>Local caching</summary>
+      <description>Enable dnscrypt-proxy local cache.</description>
+    </key>
+    <key name="require-dnssec" type="b">
+      <default>true</default>
+      <summary>Require DNSSEC</summary>
+      <description>Require resolvers that validate DNSSEC signatures.</description>
+    </key>
+    <key name="force-tcp" type="b">
+      <default>false</default>
+      <summary>Force TCP</summary>
+      <description>Force dnscrypt-proxy to use TCP instead of UDP.</description>
+    </key>
+  </schema>
+</schemalist>
