@@ -15,6 +15,9 @@
 - Restored DNS safely on deactivation by backing up NetworkManager DNS profile settings and rebuilding runtime systemd-resolved DNS from NetworkManager.
 - Removed the resolver label from the top bar indicator and switched the panel icon to the tray logo assets.
 - Added README warning that this is an experimental vibe-coding project that changes system DNS and installs a privileged helper.
+- Hardened the default Polkit rule from passwordless access to `AUTH_ADMIN_KEEP`.
+- Moved passwordless helper access to an explicit example rule that is not installed by default.
+- Added `SECURITY.md` with helper scope, passwordless mode guidance, and reporting notes.
 - Changed status detection so the UI does not report full protection when the service is active but system DNS is not using DNSCrypt.
 
 ### Added

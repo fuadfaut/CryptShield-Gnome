@@ -2,7 +2,7 @@
   "uuid": "cryptshield@fuadfaut.my.id",
   "name": "CryptShield",
   "description": "GNOME Shell indicator for controlling and monitoring dnscrypt-proxy.",
-  "version": 9,
+  "version": 10,
   "shell-version": ["46", "47", "48", "49", "50"],
   "settings-schema": "org.gnome.shell.extensions.cryptshield",
   "url": "https://github.com/fuadfaut/CryptShield-Gnome"

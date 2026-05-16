@@ -4,7 +4,7 @@ CryptShield GNOME Extension is a native GNOME Shell indicator for controlling an
 
 ## Warning
 
-This is a vibe-coding project and should be treated as experimental system software. It edits DNS, NetworkManager profiles, `systemd-resolved` runtime DNS, `dnscrypt-proxy` configuration, and installs a privileged Polkit helper. Review the scripts before using it on a work machine, shared machine, or production system.
+This is a vibe-coding project and should be treated as experimental system software. It edits DNS, NetworkManager profiles, `systemd-resolved` runtime DNS, `dnscrypt-proxy` configuration, and installs a privileged Polkit helper. Review the scripts before using it on a work machine, shared machine, or production system. The default helper install requires administrator authentication via Polkit; passwordless mode is not installed by default.
 
 ## Features
 
@@ -12,7 +12,7 @@ This is a vibe-coding project and should be treated as experimental system softw
 - Popup menu with one-click start/stop, resolver status, query counters, Preferences shortcut, and restart action.
 - Libadwaita Preferences window for resolver selection and advanced options.
 - GSettings-backed configuration for resolver, startup behavior, caching, DNSSEC, and Force TCP.
-- Polkit-backed system operations through `pkexec`, batched to avoid repeated password prompts for one action.
+- Polkit-backed system operations through `pkexec`, routed through a fixed helper instead of arbitrary shell snippets.
 - Lightweight polling of service state and local DNS routing.
 
 ## Requirements
@@ -31,13 +31,15 @@ sudo dnf install dnscrypt-proxy polkit glib2 gnome-shell
 
 ## Install Privileged Helper
 
-Install this once to avoid repeated password prompts from the extension:
+Install this once so the extension uses a fixed, validated helper instead of ad-hoc privileged shell commands:
 
 ```bash
 sudo ./install-helper.sh
 ```
 
-The helper is installed as `/usr/local/libexec/cryptshield-helper`, and a Polkit rule allows active local `wheel` users to run only that helper without repeated authentication. The helper validates CryptShield actions and only manages `dnscrypt-proxy`, its config, and active NetworkManager DNS settings.
+The helper is installed as `/usr/local/libexec/cryptshield-helper`. The default Polkit rule uses `AUTH_ADMIN_KEEP`, so protected actions can ask for administrator authentication and may be cached by Polkit for a short time. The helper validates CryptShield actions and only manages `dnscrypt-proxy`, its config, and active NetworkManager DNS settings.
+
+A passwordless example is provided at `polkit/90-cryptshield-passwordless.rules.example` for personal single-user machines, but it must be reviewed and installed manually.
 
 ## Install From Zip
 
@@ -88,7 +90,7 @@ cryptshield@fuadfaut.my.id.shell-extension.zip
 
 ## Notes
 
-CryptShield writes `/etc/dnscrypt-proxy/dnscrypt-proxy.toml`, controls `dnscrypt-proxy.service`, and changes every active NetworkManager connection to use the local DNSCrypt listener at `127.0.0.1` and `::1` while protection is enabled. The selected resolver in Preferences is written as the upstream `dnscrypt-proxy` server. Without the privileged helper, GNOME may show an administrator authentication prompt when applying a protected action.
+CryptShield writes `/etc/dnscrypt-proxy/dnscrypt-proxy.toml`, controls `dnscrypt-proxy.service`, and changes every active NetworkManager connection to use the local DNSCrypt listener at `127.0.0.1` and `::1` while protection is enabled. The selected resolver in Preferences is written as the upstream `dnscrypt-proxy` server. GNOME may show an administrator authentication prompt when applying a protected action.
 
 If the service is active but system DNS is not routed through the local proxy, the indicator shows `DNSCrypt Not Routed` instead of reporting full protection.
 

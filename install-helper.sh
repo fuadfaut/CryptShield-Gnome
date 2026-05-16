@@ -22,3 +22,4 @@ install -o root -g root -m 0755 -D "$HELPER_SOURCE" /usr/local/libexec/cryptshie
 install -o root -g root -m 0644 -D "$RULE_SOURCE" /etc/polkit-1/rules.d/90-cryptshield.rules
 
 echo "CryptShield helper installed."
+echo "Default Polkit mode is AUTH_ADMIN_KEEP: protected actions may ask for administrator authentication."
