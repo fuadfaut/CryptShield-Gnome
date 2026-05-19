@@ -20,6 +20,8 @@ import {
 const PANEL_ICON_ACTIVE = 'security-high-symbolic';
 const PANEL_ICON_INACTIVE = 'security-medium-symbolic';
 const POLL_SECONDS = 5;
+const AUTO_APPLY_DELAY_SECONDS = 2;
+const AUTO_APPLY_RETRY_SECONDS = 60;
 
 const CryptShieldIndicator = GObject.registerClass(
 class CryptShieldIndicator extends PanelMenu.Button {
@@ -31,17 +33,25 @@ class CryptShieldIndicator extends PanelMenu.Button {
         this._isActive = false;
         this._isDnsRouted = false;
         this._busy = false;
+        this._autoApplying = false;
+        this._autoApplyId = 0;
+        this._autoApplyRetryAt = 0;
         this._pollId = 0;
+        this._networkMonitor = null;
+        this._networkSignalId = 0;
         this._settingsSignals = [];
+        this._protectionWanted = this._settings.get_boolean('run-on-startup');
 
         this._buildPanel();
         this._buildMenu();
         this._bindSettings();
+        this._bindNetworkMonitor();
 
-        this._refreshStatus();
-        this._refreshStats();
+        this._updateUi();
+        this._refreshStatus({autoRoute: true});
+        this._scheduleAutoApply(1);
         this._pollId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, POLL_SECONDS, () => {
-            this._refreshStatus();
+            this._refreshStatus({autoRoute: true});
 
             if (this.menu.isOpen)
                 this._refreshStats();
@@ -165,24 +175,52 @@ class CryptShieldIndicator extends PanelMenu.Button {
 
     _bindSettings() {
         const updateResolver = () => this._updateUi();
+        const updateStartup = () => {
+            this._protectionWanted = this._settings.get_boolean('run-on-startup');
+
+            if (this._protectionWanted)
+                this._scheduleAutoApply(1);
+            else
+                this._cancelAutoApply();
+        };
 
         this._settingsSignals.push(
-            this._settings.connect('changed::resolver', updateResolver)
+            this._settings.connect('changed::resolver', updateResolver),
+            this._settings.connect('changed::run-on-startup', updateStartup)
         );
+    }
+
+    _bindNetworkMonitor() {
+        try {
+            this._networkMonitor = Gio.NetworkMonitor.get_default();
+            this._networkSignalId = this._networkMonitor.connect('network-changed', () => {
+                if (this._protectionWanted)
+                    this._scheduleAutoApply();
+            });
+        } catch (error) {
+            logError(error, 'CryptShield network monitor failed');
+        }
     }
 
     async _toggleProtection(targetState = null) {
         if (this._busy)
             return;
 
+        const previousWanted = this._protectionWanted;
         this._busy = true;
         this._setBusy(true);
 
         try {
             const shouldEnable = targetState ?? !(this._isActive && this._isDnsRouted);
+            this._protectionWanted = shouldEnable;
+
+            if (!shouldEnable)
+                this._cancelAutoApply();
+
             await setProtectionActive(this._settings, shouldEnable);
             await this._refreshStatus();
         } catch (error) {
+            this._protectionWanted = previousWanted;
             Main.notifyError(_('CryptShield'), error.message);
             this._updateUi();
         } finally {
@@ -210,12 +248,17 @@ class CryptShieldIndicator extends PanelMenu.Button {
         }
     }
 
-    async _refreshStatus() {
+    async _refreshStatus(options = {}) {
+        const {autoRoute = false} = options;
+
         try {
             const status = await getProtectionStatus();
             this._isActive = status.isServiceActive;
             this._isDnsRouted = status.isDnsRouted;
             this._updateUi();
+
+            if (autoRoute && this._protectionWanted && status.isServiceActive && !status.isDnsRouted)
+                this._scheduleAutoApply();
         } catch (error) {
             logError(error, 'CryptShield status refresh failed');
         }
@@ -228,6 +271,69 @@ class CryptShieldIndicator extends PanelMenu.Button {
             this._blockedLabel.text = stats.blocked.toLocaleString();
         } catch (error) {
             logError(error, 'CryptShield stats refresh failed');
+        }
+    }
+
+    _scheduleAutoApply(delaySeconds = AUTO_APPLY_DELAY_SECONDS) {
+        if (!this._protectionWanted)
+            return;
+
+        const now = GLib.get_monotonic_time() / GLib.USEC_PER_SEC;
+        const retryDelay = Math.max(0, this._autoApplyRetryAt - now);
+        const effectiveDelay = Math.ceil(Math.max(delaySeconds, retryDelay));
+
+        this._cancelAutoApply();
+        this._autoApplyId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, effectiveDelay, () => {
+            this._autoApplyId = 0;
+            this._ensureProtection().catch(error => {
+                this._autoApplyRetryAt = (GLib.get_monotonic_time() / GLib.USEC_PER_SEC) + AUTO_APPLY_RETRY_SECONDS;
+                logError(error, 'CryptShield automatic activation failed');
+                Main.notifyError(_('CryptShield'), error.message);
+            });
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _cancelAutoApply() {
+        if (!this._autoApplyId)
+            return;
+
+        GLib.Source.remove(this._autoApplyId);
+        this._autoApplyId = 0;
+    }
+
+    async _ensureProtection() {
+        if (this._busy || this._autoApplying || !this._protectionWanted)
+            return;
+
+        this._autoApplying = true;
+
+        try {
+            const status = await getProtectionStatus();
+            this._isActive = status.isServiceActive;
+            this._isDnsRouted = status.isDnsRouted;
+            this._updateUi();
+
+            if (status.isServiceActive && status.isDnsRouted)
+                return;
+
+            if (!this._protectionWanted || this._busy)
+                return;
+
+            this._busy = true;
+            this._setBusy(true);
+
+            try {
+                await setProtectionActive(this._settings, true);
+                this._autoApplyRetryAt = 0;
+                await this._refreshStatus();
+            } finally {
+                this._busy = false;
+                this._setBusy(false);
+            }
+
+        } finally {
+            this._autoApplying = false;
         }
     }
 
@@ -274,6 +380,15 @@ class CryptShieldIndicator extends PanelMenu.Button {
             GLib.Source.remove(this._pollId);
             this._pollId = 0;
         }
+
+        this._cancelAutoApply();
+
+        if (this._networkSignalId) {
+            this._networkMonitor.disconnect(this._networkSignalId);
+            this._networkSignalId = 0;
+        }
+
+        this._networkMonitor = null;
 
         for (const signalId of this._settingsSignals)
             this._settings.disconnect(signalId);
