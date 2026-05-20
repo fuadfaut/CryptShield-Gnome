@@ -20,21 +20,3 @@
   color: #9a9996;
   font-size: 12px;
 }
-
-.cryptshield-stats {
-  spacing: 6px;
-}
-
-.cryptshield-stat-row {
-  spacing: 24px;
-}
-
-.cryptshield-stat-value {
-  color: #c0bfbc;
-  font-family: monospace;
-  text-align: right;
-}
-
-.cryptshield-stat-blocked {
-  color: #ff7b72;
-}

@@ -2,12 +2,11 @@ import Gio from 'gi://Gio';
 
 export const SERVICE_NAME = 'dnscrypt-proxy.service';
 export const CONFIG_PATH = '/etc/dnscrypt-proxy/dnscrypt-proxy.toml';
-export const QUERY_LOG_PATH = '/var/log/dnscrypt-query.log';
-const BLOCKED_NAMES_LOG_PATH = '/var/log/dnscrypt-blocked-names.log';
-const BLOCKED_IPS_LOG_PATH = '/var/log/dnscrypt-blocked-ips.log';
 const LOCAL_DNS_IPV4 = '127.0.0.1';
 const LOCAL_DNS_IPV6 = '::1';
 const LOCAL_DNS_PRIORITY = '-50';
+const DNS_PROBE_HOST = 'example.com';
+const DNS_READY_TIMEOUT_SECONDS = 90;
 const HELPER_PATH = '/usr/local/libexec/cryptshield-helper';
 
 export const RESOLVERS = [
@@ -225,6 +224,9 @@ function prepareRuntimeScript() {
 
 function routeSystemDnsScript() {
     return `
+${dnsReadinessScript()}
+wait_for_local_dns
+
 if command -v nmcli >/dev/null 2>&1; then
     nmcli -t -f UUID,TYPE,DEVICE connection show --active | while IFS=: read -r uuid type device; do
         [ -n "$uuid" ] || continue
@@ -252,6 +254,39 @@ if command -v resolvectl >/dev/null 2>&1 && command -v nmcli >/dev/null 2>&1; th
         resolvectl default-route "$device" yes || true
     done
 fi`.trim();
+}
+
+function dnsReadinessScript() {
+    return `
+probe_local_dns_once() {
+    if command -v dig >/dev/null 2>&1; then
+        dig @${shellQuote(LOCAL_DNS_IPV4)} ${shellQuote(DNS_PROBE_HOST)} A +time=1 +tries=1 +short 2>/dev/null | grep -q .
+        return $?
+    fi
+
+    if command -v nslookup >/dev/null 2>&1; then
+        nslookup -timeout=1 ${shellQuote(DNS_PROBE_HOST)} ${shellQuote(LOCAL_DNS_IPV4)} >/dev/null 2>&1
+        return $?
+    fi
+
+    command -v dnscrypt-proxy >/dev/null 2>&1 || return 1
+    dnscrypt-proxy -resolve ${shellQuote(`${DNS_PROBE_HOST},${LOCAL_DNS_IPV4}:53`)} >/dev/null 2>&1
+}
+
+wait_for_local_dns() {
+    deadline=$(( $(date +%s) + ${DNS_READY_TIMEOUT_SECONDS} ))
+
+    while [ "$(date +%s)" -le "$deadline" ]; do
+        if probe_local_dns_once; then
+            return 0
+        fi
+
+        sleep 1
+    done
+
+    echo "CryptShield: local DNS did not become ready; system DNS was not routed." >&2
+    return 1
+}`.trim();
 }
 
 function revertSystemDnsScript() {
@@ -287,11 +322,6 @@ fi`.trim();
 }
 
 async function getDnsRouteStatus() {
-    const networkManagerStatus = await getNetworkManagerRouteStatus();
-
-    if (networkManagerStatus)
-        return networkManagerStatus;
-
     const resolvedResult = await runCommand(['resolvectl', 'dns'], {allowFailure: true});
 
     if (resolvedResult.ok && hasLocalDns(resolvedResult.stdout))
@@ -303,57 +333,6 @@ async function getDnsRouteStatus() {
         routed: resolvConfResult.ok && hasLocalDns(resolvConfResult.stdout),
         source: resolvConfResult.ok ? 'resolv.conf' : 'unknown'
     };
-}
-
-async function getNetworkManagerRouteStatus() {
-    const activeResult = await runCommand(
-        ['nmcli', '-t', '-f', 'UUID,TYPE', 'connection', 'show', '--active'],
-        {allowFailure: true}
-    );
-
-    if (!activeResult.ok)
-        return null;
-
-    const connections = activeResult.stdout
-        .split('\n')
-        .map(line => line.trim())
-        .filter(Boolean)
-        .map(line => {
-            const [uuid, type] = line.split(':');
-            return {uuid, type};
-        })
-        .filter(connection => connection.uuid && isManagedDnsConnection(connection.type));
-
-    if (connections.length === 0)
-        return {routed: false, source: 'NetworkManager'};
-
-    for (const connection of connections) {
-        const profileResult = await runCommand(
-            ['nmcli', '-g', 'ipv4.dns,ipv4.ignore-auto-dns,ipv6.dns,ipv6.ignore-auto-dns', 'connection', 'show', connection.uuid],
-            {allowFailure: true}
-        );
-
-        if (!profileResult.ok || !profileUsesLocalDns(profileResult.stdout))
-            return {routed: false, source: 'NetworkManager'};
-    }
-
-    return {routed: true, source: 'NetworkManager'};
-}
-
-function isManagedDnsConnection(type) {
-    return !['loopback', 'dummy'].includes(type);
-}
-
-function profileUsesLocalDns(output) {
-    const [ipv4Dns = '', ipv4Ignore = '', ipv6Dns = '', ipv6Ignore = ''] = output
-        .replaceAll('\\:', ':')
-        .trimEnd()
-        .split('\n');
-
-    return hasLocalIpv4(ipv4Dns) &&
-        ipv4Ignore.trim() === 'yes' &&
-        (!ipv6Dns.trim() || hasLocalIpv6(ipv6Dns)) &&
-        (!ipv6Dns.trim() || ipv6Ignore.trim() === 'yes');
 }
 
 function hasLocalDns(output) {
@@ -385,33 +364,4 @@ function shellCommand(argv) {
 
 function shellQuote(value) {
     return `'${String(value).replace(/'/g, "'\\''")}'`;
-}
-
-export async function readQueryStats() {
-    const totalResult = await runCommand(['wc', '-l', QUERY_LOG_PATH], {allowFailure: true});
-    const total = totalResult.ok ? Number.parseInt(totalResult.stdout.trim().split(/\s+/)[0], 10) || 0 : 0;
-
-    const tailResult = await runCommand(['tail', '-n', '5000', QUERY_LOG_PATH], {allowFailure: true});
-    const sample = tailResult.ok ? tailResult.stdout : '';
-    const recentlyBlocked = sample
-        .split('\n')
-        .filter(line => /\b(DROP|REJECT|SYNTH|BLOCK|BLOCKED)\b/i.test(line))
-        .length;
-    const blocked = Math.max(recentlyBlocked, await countBlockedLogs());
-
-    return {total, blocked};
-}
-
-async function countBlockedLogs() {
-    const results = await Promise.all([
-        runCommand(['wc', '-l', BLOCKED_NAMES_LOG_PATH], {allowFailure: true}),
-        runCommand(['wc', '-l', BLOCKED_IPS_LOG_PATH], {allowFailure: true})
-    ]);
-
-    return results.reduce((count, result) => {
-        if (!result.ok)
-            return count;
-
-        return count + (Number.parseInt(result.stdout.trim().split(/\s+/)[0], 10) || 0);
-    }, 0);
 }

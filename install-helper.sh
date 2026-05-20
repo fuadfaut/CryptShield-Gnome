@@ -26,10 +26,15 @@ fi
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 HELPER_SOURCE="$SCRIPT_DIR/helpers/cryptshield-helper"
+DISPATCHER_SOURCE="$SCRIPT_DIR/helpers/cryptshield-nm-dispatcher"
 RULE_SOURCE="$SCRIPT_DIR/polkit/90-cryptshield.rules"
 
 if [ ! -f "$HELPER_SOURCE" ]; then
     HELPER_SOURCE="$SCRIPT_DIR/cryptshield-helper"
+fi
+
+if [ ! -f "$DISPATCHER_SOURCE" ]; then
+    DISPATCHER_SOURCE="$SCRIPT_DIR/cryptshield-nm-dispatcher"
 fi
 
 if [ ! -f "$RULE_SOURCE" ]; then
@@ -37,8 +42,10 @@ if [ ! -f "$RULE_SOURCE" ]; then
 fi
 
 install -o root -g root -m 0755 -D "$HELPER_SOURCE" /usr/local/libexec/cryptshield-helper
+install -o root -g root -m 0755 -D "$DISPATCHER_SOURCE" /etc/NetworkManager/dispatcher.d/90-cryptshield
 
 echo "CryptShield helper installed."
+echo "NetworkManager dispatcher installed."
 
 if [ "$MODE" = 'passwordless' ]; then
     install -o root -g root -m 0644 /dev/null /etc/polkit-1/rules.d/90-cryptshield.rules

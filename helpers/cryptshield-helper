@@ -6,10 +6,13 @@ CONFIG_PATH='/etc/dnscrypt-proxy/dnscrypt-proxy.toml'
 LOCAL_DNS_IPV4='127.0.0.1'
 LOCAL_DNS_IPV6='::1'
 LOCAL_DNS_PRIORITY='-50'
+DNS_PROBE_HOST='example.com'
+DNS_READY_TIMEOUT_SECONDS='90'
 STATE_DIR='/var/lib/cryptshield'
 
 usage() {
     echo "Usage: cryptshield-helper activate|restart|configure RESOLVER CACHE DNSSEC FORCE_TCP" >&2
+    echo "       cryptshield-helper route" >&2
     echo "       cryptshield-helper deactivate" >&2
     echo "       cryptshield-helper startup true|false" >&2
     exit 2
@@ -123,6 +126,71 @@ clear_saved_state() {
     rm -f "$STATE_DIR"/nm-* 2>/dev/null || true
 }
 
+probe_local_dns_once() {
+    if command -v dig >/dev/null 2>&1; then
+        dig @"$LOCAL_DNS_IPV4" "$DNS_PROBE_HOST" A +time=1 +tries=1 +short 2>/dev/null | grep -q .
+        return $?
+    fi
+
+    if command -v nslookup >/dev/null 2>&1; then
+        nslookup -timeout=1 "$DNS_PROBE_HOST" "$LOCAL_DNS_IPV4" >/dev/null 2>&1
+        return $?
+    fi
+
+    command -v dnscrypt-proxy >/dev/null 2>&1 || return 1
+    dnscrypt-proxy -resolve "$DNS_PROBE_HOST,$LOCAL_DNS_IPV4:53" >/dev/null 2>&1
+}
+
+wait_for_local_dns() {
+    deadline=$(( $(date +%s) + DNS_READY_TIMEOUT_SECONDS ))
+
+    while [ "$(date +%s)" -le "$deadline" ]; do
+        if probe_local_dns_once; then
+            return 0
+        fi
+
+        sleep 1
+    done
+
+    echo "CryptShield: local DNS did not become ready; system DNS was not routed." >&2
+    return 1
+}
+
+has_local_ipv4() {
+    case " $1 " in
+        *" $LOCAL_DNS_IPV4 "*|*" $LOCAL_DNS_IPV4,"*|*",$LOCAL_DNS_IPV4 "*|*",$LOCAL_DNS_IPV4,"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+has_local_ipv6() {
+    case " $1 " in
+        *" $LOCAL_DNS_IPV6 "*|*" [$LOCAL_DNS_IPV6] "*|*" $LOCAL_DNS_IPV6,"*|*" [$LOCAL_DNS_IPV6],"*|*",$LOCAL_DNS_IPV6 "*|*",[$LOCAL_DNS_IPV6] "*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+connection_uses_local_dns() {
+    uuid="$1"
+    profile="$(nmcli -g ipv4.dns,ipv4.ignore-auto-dns,ipv6.dns,ipv6.ignore-auto-dns connection show "$uuid" 2>/dev/null || true)"
+    [ -n "$profile" ] || return 1
+
+    ipv4_dns="$(printf '%s\n' "$profile" | sed -n '1p' | sed 's/\\:/:/g')"
+    ipv4_ignore="$(printf '%s\n' "$profile" | sed -n '2p')"
+    ipv6_dns="$(printf '%s\n' "$profile" | sed -n '3p' | sed 's/\\:/:/g')"
+    ipv6_ignore="$(printf '%s\n' "$profile" | sed -n '4p')"
+
+    has_local_ipv4 "$ipv4_dns" || return 1
+    [ "$ipv4_ignore" = yes ] || return 1
+
+    if [ -n "$ipv6_dns" ]; then
+        has_local_ipv6 "$ipv6_dns" || return 1
+        [ "$ipv6_ignore" = yes ] || return 1
+    fi
+
+    return 0
+}
+
 bool_expression() {
     key="$1"
     value="$2"
@@ -165,12 +233,24 @@ configure_dnscrypt() {
 }
 
 route_system_dns() {
+    wait_for_local_dns
+
     if command -v nmcli >/dev/null 2>&1; then
         backup_nm_dns_profiles
 
         nmcli -t -f UUID,TYPE,DEVICE connection show --active | while IFS=: read -r uuid type device; do
             [ -n "$uuid" ] || continue
             is_managed_dns_connection "$type" || continue
+
+            if connection_uses_local_dns "$uuid"; then
+                if [ -n "$device" ] && command -v resolvectl >/dev/null 2>&1; then
+                    resolvectl dns "$device" "$LOCAL_DNS_IPV4" "$LOCAL_DNS_IPV6" || true
+                    resolvectl domain "$device" '~.' || true
+                    resolvectl default-route "$device" yes || true
+                fi
+                continue
+            fi
+
             nmcli connection modify "$uuid" \
                 ipv4.dns "$LOCAL_DNS_IPV4" \
                 ipv4.ignore-auto-dns yes \
@@ -215,19 +295,32 @@ case "$action" in
         prepare_runtime_dirs
         configure_dnscrypt "$1" "$2" "$3" "$4"
         systemctl start "$SERVICE_NAME"
-        route_system_dns
+        route_system_dns || {
+            systemctl stop "$SERVICE_NAME" || true
+            revert_system_dns
+            exit 1
+        }
         ;;
     restart)
         [ "$#" -eq 4 ] || usage
         prepare_runtime_dirs
         configure_dnscrypt "$1" "$2" "$3" "$4"
         systemctl restart "$SERVICE_NAME"
-        route_system_dns
+        route_system_dns || {
+            systemctl stop "$SERVICE_NAME" || true
+            revert_system_dns
+            exit 1
+        }
         ;;
     configure)
         [ "$#" -eq 4 ] || usage
         prepare_runtime_dirs
         configure_dnscrypt "$1" "$2" "$3" "$4"
+        ;;
+    route)
+        [ "$#" -eq 0 ] || usage
+        prepare_runtime_dirs
+        route_system_dns
         ;;
     deactivate)
         [ "$#" -eq 0 ] || usage
