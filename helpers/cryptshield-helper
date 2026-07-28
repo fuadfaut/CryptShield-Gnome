@@ -34,7 +34,7 @@ validate_bool() {
 
 validate_resolver() {
     case "$1" in
-        ''|cloudflare|quad9|adguard|google|nextdns|cisco|mullvad-doh|cleanbrowsing-adult|doh.tiar.app) return 0 ;;
+        ''|cloudflare|quad9|quad9-dnscrypt-ip4-filter-pri|adguard|adguard-dns|adguard-dns-doh|google|nextdns|cisco|mullvad-doh|cleanbrowsing-adult|doh.tiar.app|doh.tiar.app-doh) return 0 ;;
         *) usage ;;
     esac
 }

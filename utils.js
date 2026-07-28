@@ -12,14 +12,14 @@ const HELPER_PATH = '/usr/local/libexec/cryptshield-helper';
 export const RESOLVERS = [
     {id: '', label: 'All Servers'},
     {id: 'cloudflare', label: 'Cloudflare'},
-    {id: 'quad9', label: 'Quad9'},
-    {id: 'adguard', label: 'AdGuard DNS'},
+    {id: 'quad9-dnscrypt-ip4-filter-pri', label: 'Quad9'},
+    {id: 'adguard-dns-doh', label: 'AdGuard DNS'},
     {id: 'google', label: 'Google DNS'},
     {id: 'nextdns', label: 'NextDNS'},
     {id: 'cisco', label: 'Cisco OpenDNS'},
     {id: 'mullvad-doh', label: 'Mullvad'},
     {id: 'cleanbrowsing-adult', label: 'CleanBrowsing'},
-    {id: 'doh.tiar.app', label: 'TiarApp'}
+    {id: 'doh.tiar.app-doh', label: 'TiarApp'}
 ];
 
 export function resolverLabel(id) {
@@ -27,7 +27,14 @@ export function resolverLabel(id) {
 }
 
 export function normalizeResolver(id) {
-    return RESOLVERS.some(resolver => resolver.id === id) ? id : 'cloudflare';
+    const legacyMap = {
+        'doh.tiar.app': 'doh.tiar.app-doh',
+        'quad9': 'quad9-dnscrypt-ip4-filter-pri',
+        'adguard': 'adguard-dns-doh',
+        'adguard-dns': 'adguard-dns-doh'
+    };
+    const mapped = legacyMap[id] ?? id;
+    return RESOLVERS.some(resolver => resolver.id === mapped) ? mapped : 'cloudflare';
 }
 
 export function resolverIndex(id) {
